@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard MQTT - Casa Inteligente</title>
+  <!-- Biblioteca Paho MQTT para WebSocket -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+    .card { background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    h1 { color: #333; text-align: center; }
+    .status { padding: 10px; border-radius: 5px; text-align: center; font-weight: bold; }
+    .connected { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+    .btn { padding: 15px 30px; font-size: 18px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; }
+    .btn-on { background: #28a745; color: white; }
+    .btn-off { background: #dc3545; color: white; }
+    .btn:hover { opacity: 0.9; }
+    .log { background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 5px; font-family: monospace; max-height: 200px; overflow-y: auto; }
+    input { padding: 10px; width: 200px; margin: 5px; }
+  </style>
+</head>
+<body>
+  <h1>🏠 Dashboard Casa Inteligente</h1>
+  
+  <div class="card">
+    <h3>🔗 Conexão MQTT</h3>
+    <div id="status" class="status disconnected">Desconectado</div>
+    <input type="text" id="clientId" placeholder="Client ID" value="web-cliente">
+    <button class="btn" onclick="connectMQTT()">Conectar</button>
+    <button class="btn" onclick="disconnectMQTT()">Desconectar</button>
+  </div>
+
+  <div class="card">
+    <h3>💡 Controle de Relés</h3>
+    <p><strong>Tópico Base:</strong> <code>casa/automacao/k16fb3456$</code></p>
+    
+    <div style="margin: 10px 0;">
+      <h4>Relé 1 (PCF 0x24, Pino 0)</h4>
+      <button class="btn btn-on" onclick="publishRelay('0x24', 0, 1)">LIGAR</button>
+      <button class="btn btn-off" onclick="publishRelay('0x24', 0, 0)">DESLIGAR</button>
+    </div>
+
+    <div style="margin: 10px 0;">
+      <h4>Relé 2 (PCF 0x24, Pino 1)</h4>
+      <button class="btn btn-on" onclick="publishRelay('0x24', 1, 1)">LIGAR</button>
+      <button class="btn btn-off" onclick="publishRelay('0x24', 1, 0)">DESLIGAR</button>
+    </div>
+
+    <div style="margin: 10px 0;">
+      <h4>Relé 3 (PCF 0x24, Pino 2)</h4>
+      <button class="btn btn-on" onclick="publishRelay('0x24', 2, 1)">LIGAR</button>
+      <button class="btn btn-off" onclick="publishRelay('0x24', 2, 0)">DESLIGAR</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>📊 Monitoramento em Tempo Real</h3>
+    <div id="telemetria">Aguardando dados...</div>
+  </div>
+
+  <div class="card">
+    <h3>📝 Log de Mensagens</h3>
+    <div id="log" class="log"></div>
+    <button class="btn" onclick="document.getElementById('log').innerHTML=''">Limpar Log</button>
+  </div>
+
+  <script>
+    // ================= CONFIGURAÇÕES =================
+    const MQTT_BROKER = "broker.emqx.io";
+    const MQTT_PORT = 8084;  // ⚠️ Porta WebSocket TLS (não é 8883!)
+    const BASE_TOPIC = "casa/automacao/k16fb3456$";
+    // =================================================
+
+    let client;
+    const logDiv = document.getElementById("log");
+    const statusDiv = document.getElementById("status");
+    const telemetriaDiv = document.getElementById("telemetria");
+
+    function addLog(msg) {
+      const time = new Date().toLocaleTimeString();
+      logDiv.innerHTML += `[${time}] ${msg}<br>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function connectMQTT() {
+      const clientId = document.getElementById("clientId").value || "web-" + Math.random().toString(16).substr(2, 8);
+      client = new Paho.MQTT.Client(MQTT_BROKER, MQTT_PORT, clientId);
+
+      client.onConnectionLost = (responseObject) => {
+        if (responseObject.errorCode !== 0) {
+          addLog("❌ Conexão perdida: " + responseObject.errorMessage);
+          updateStatus(false);
+        }
+      };
+
+      client.onMessageArrived = (message) => {
+        addLog("📥 " + message.destinationName + " = " + message.payloadString);
+        
+        // Atualiza telemetria se for o tópico correto
+        if (message.destinationName.includes("/telemetria")) {
+          try {
+            const data = JSON.parse(message.payloadString);
+            telemetriaDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+          } catch (e) {
+            telemetriaDiv.innerHTML = message.payloadString;
+          }
+        }
+      };
+
+      const options = {
+        timeout: 10,
+        useSSL: true,  // ✅ TLS ativado
+        onSuccess: () => {
+          addLog("✅ Conectado ao broker!");
+          updateStatus(true);
+          client.subscribe(BASE_TOPIC + "/#", { qos: 1 });
+          addLog("📡 Inscrito em: " + BASE_TOPIC + "/#");
+        },
+        onFailure: (err) => {
+          addLog("❌ Falha na conexão: " + err.errorMessage);
+          updateStatus(false);
+        }
+      };
+
+      addLog("🔄 Conectando a " + MQTT_BROKER + ":" + MQTT_PORT + "...");
+      client.connect(options);
+    }
+
+    function disconnectMQTT() {
+      if (client) {
+        client.disconnect();
+        addLog("🔌 Desconectado manualmente");
+        updateStatus(false);
+      }
+    }
+
+    function publishRelay(addr, pin, state) {
+      if (!client || !client.isConnected()) {
+        alert("❌ Conecte-se ao broker primeiro!");
+        return;
+      }
+      const topic = BASE_TOPIC + "/rele/" + addr + "/pin/" + pin;
+      const payload = JSON.stringify({ acao: state ? "liga" : "desliga", estado: state });
+      
+      const message = new Paho.MQTT.Message(payload);
+      message.destinationName = topic;
+      message.qos = 1;
+      client.send(message);
+      
+      addLog("📤 Publicado: " + topic + " = " + payload);
+    }
+
+    function updateStatus(connected) {
+      if (connected) {
+        statusDiv.className = "status connected";
+        statusDiv.innerHTML = "✅ Conectado";
+      } else {
+        statusDiv.className = "status disconnected";
+        statusDiv.innerHTML = "❌ Desconectado";
+      }
+    }
+
+    addLog("🚀 Dashboard iniciado. Clique em 'Conectar' para começar.");
+  </script>
+</body>
+</html>
