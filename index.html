@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🔐 Login - Casa Inteligente</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+    .card { background: white; padding: 20px; margin: 10px 0; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    h1 { color: #333; text-align: center; }
+    .status { padding: 10px; border-radius: 5px; text-align: center; font-weight: bold; }
+    .connected { background: #d4edda; color: #155724; }
+    .disconnected { background: #f8d7da; color: #721c24; }
+    .btn { padding: 15px 30px; font-size: 18px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; transition: all 0.15s ease; }
+    .btn-on { background: #28a745; color: white; }
+    .btn-off { background: #dc3545; color: white; }
+    .btn:active { transform: scale(0.95); filter: brightness(0.85); }
+    .btn.pressed { animation: pulse 0.3s ease; filter: brightness(1.2); box-shadow: 0 0 15px rgba(255,255,255,0.6); }
+    @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+    .btn:hover { opacity: 0.9; }
+    .btn-on.confirmed { background: #20c997 !important; }
+    .btn-off.confirmed { background: #fd7e14 !important; }
+    .relay-selector { display: flex; align-items: center; gap: 10px; margin: 15px 0; flex-wrap: wrap; }
+    select { padding: 12px 15px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px; background: white; min-width: 280px; cursor: pointer; }
+    select:focus { outline: none; border-color: #007bff; box-shadow: 0 0 0 3px rgba(0,123,255,0.25); }
+    .selected-info { background: #e7f3ff; padding: 10px 15px; border-radius: 5px; border-left: 4px solid #007bff; font-size: 14px; }
+    .selected-info code { background: #fff; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+    .log { background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 5px; font-family: monospace; max-height: 200px; overflow-y: auto; }
+    input[type="text"], input[type="password"] { padding: 12px; width: 200px; margin: 5px; border: 2px solid #ddd; border-radius: 5px; font-size: 16px; }
+    input[type="text"]:focus, input[type="password"]:focus { outline: none; border-color: #007bff; }
+    .btn-group { display: flex; gap: 10px; margin: 15px 0; flex-wrap: wrap; }
+    
+    /* === TELA DE LOGIN === */
+    #loginScreen { text-align: center; padding: 40px 20px; }
+    #loginScreen h2 { margin-bottom: 20px; color: #333; }
+    #loginScreen .error { color: #dc3545; margin: 10px 0; font-weight: bold; display: none; }
+    #loginScreen input { width: 100%; max-width: 300px; margin: 10px auto; display: block; }
+    #loginScreen .btn { background: #007bff; color: white; margin-top: 10px; }
+    #loginScreen .btn:hover { background: #0056b3; }
+    
+    /* === CONTEÚDO PRINCIPAL (oculto até login) === */
+    #mainContent { display: none; }
+    .logout-btn { background: #6c757d; color: white; font-size: 14px; padding: 8px 15px; margin-left: auto; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+
+  <!-- 🔐 TELA DE LOGIN -->
+  <div id="loginScreen" class="card">
+    <h1>🔐 Acesso Restrito</h1>
+    <h2>Casa Inteligente</h2>
+    <input type="password" id="loginPassword" placeholder="Digite a senha" onkeypress="if(event.key==='Enter') doLogin()">
+    <div id="loginError" class="error">❌ Senha incorreta!</div>
+    <button class="btn" onclick="doLogin()">Entrar</button>
+    <p style="font-size: 12px; color: #666; margin-top: 20px;">
+      💡 Dica: A senha padrão é <code>1234</code><br>
+      <small>(Altere no código para maior segurança)</small>
+    </p>
+  </div>
+
+  <!-- 📱 CONTEÚDO PRINCIPAL (aparece após login) -->
+  <div id="mainContent">
+    
+    <div class="header">
+      <h1>🏠 Dashboard Casa Inteligente</h1>
+      <button class="btn logout-btn" onclick="doLogout()">🚪 Sair</button>
+    </div>
+    
+    <!-- Conexão MQTT -->
+    <div class="card">
+      <h3>🔗 Conexão MQTT</h3>
+      <div id="status" class="status disconnected">Desconectado</div>
+      <div style="margin: 10px 0;">
+        <input type="text" id="clientId" placeholder="Client ID" value="web-cliente">
+        <!-- 🔐 Campos de autenticação MQTT (opcional) -->
+        <input type="text" id="mqttUser" placeholder="Usuário MQTT (opcional)" style="width: 180px;">
+        <input type="password" id="mqttPass" placeholder="Senha MQTT (opcional)" style="width: 180px;">
+      </div>
+      <button class="btn" onclick="connectMQTT()">Conectar</button>
+      <button class="btn" onclick="disconnectMQTT()">Desconectar</button>
+    </div>
+
+    <!-- Controle de Relés com Seletor -->
+    <div class="card">
+      <h3>💡 Controle de Relés</h3>
+      <p><strong>Tópico Base:</strong> <code id="baseTopicDisplay">casa/automacao/k16fb3456$</code></p>
+      
+      <div class="relay-selector">
+        <label for="relaySelect"><strong>Selecionar Saída:</strong></label>
+        <select id="relaySelect" onchange="updateRelayInfo()">
+          <optgroup label="PCF8574 - Endereço 0x24">
+            <option value="0x24|0">Relé 1 → PCF 0x24, Pino 0</option>
+            <option value="0x24|1">Relé 2 → PCF 0x24, Pino 1</option>
+            <option value="0x24|2">Relé 3 → PCF 0x24, Pino 2</option>
+            <option value="0x24|3">Relé 4 → PCF 0x24, Pino 3</option>
+            <option value="0x24|4">Relé 5 → PCF 0x24, Pino 4</option>
+            <option value="0x24|5">Relé 6 → PCF 0x24, Pino 5</option>
+            <option value="0x24|6">Relé 7 → PCF 0x24, Pino 6</option>
+            <option value="0x24|7">Relé 8 → PCF 0x24, Pino 7</option>
+          </optgroup>
+          <optgroup label="PCF8574 - Endereço 0x25">
+            <option value="0x25|0">Relé 9 → PCF 0x25, Pino 0</option>
+            <option value="0x25|1">Relé 10 → PCF 0x25, Pino 1</option>
+            <option value="0x25|2">Relé 11 → PCF 0x25, Pino 2</option>
+            <option value="0x25|3">Relé 12 → PCF 0x25, Pino 3</option>
+            <option value="0x25|4">Relé 13 → PCF 0x25, Pino 4</option>
+            <option value="0x25|5">Relé 14 → PCF 0x25, Pino 5</option>
+            <option value="0x25|6">Relé 15 → PCF 0x25, Pino 6</option>
+            <option value="0x25|7">Relé 16 → PCF 0x25, Pino 7</option>
+          </optgroup>
+        </select>
+      </div>
+      
+      <div id="relayInfo" class="selected-info"></div>
+      
+      <div class="btn-group">
+        <button id="btnLigar" class="btn btn-on" onclick="publishRelay(1)">🔌 LIGAR</button>
+        <button id="btnDesligar" class="btn btn-off" onclick="publishRelay(0)">🔌 DESLIGAR</button>
+      </div>
+      
+      <p style="font-size: 13px; color: #666; margin-top: 10px;">
+        💡 <strong>Dica:</strong> Selecione o relé no dropdown e clique em LIGAR ou DESLIGAR.
+      </p>
+    </div>
+
+    <!-- Monitoramento -->
+    <div class="card">
+      <h3>📊 Monitoramento em Tempo Real</h3>
+      <div id="telemetria">Aguardando dados...</div>
+    </div>
+
+    <!-- Log -->
+    <div class="card">
+      <h3>📝 Log de Mensagens</h3>
+      <div id="log" class="log"></div>
+      <button class="btn" onclick="document.getElementById('log').innerHTML=''">Limpar Log</button>
+    </div>
+
+  </div> <!-- Fim do mainContent -->
+
+  <script>
+    // ================= CONFIGURAÇÕES =================
+    const MQTT_BROKER = "broker.emqx.io";
+    const MQTT_PORT = 8084;
+    const BASE_TOPIC = "casa/automacao/k16fb3456$";
+    
+    // 🔐 SENHA DO DASHBOARD (ALTERE AQUI!)
+    const DASHBOARD_PASSWORD = "1234";  // ← Mude para algo mais seguro!
+    // =================================================
+
+    let client;
+    let isLoggedIn = false;
+    const logDiv = document.getElementById("log");
+    const statusDiv = document.getElementById("status");
+    const telemetriaDiv = document.getElementById("telemetria");
+    const relaySelect = document.getElementById("relaySelect");
+    const relayInfo = document.getElementById("relayInfo");
+    const btnLigar = document.getElementById("btnLigar");
+    const btnDesligar = document.getElementById("btnDesligar");
+    const loginScreen = document.getElementById("loginScreen");
+    const mainContent = document.getElementById("mainContent");
+    const loginError = document.getElementById("loginError");
+
+    // === 🔐 FUNÇÕES DE LOGIN ===
+    
+    // Verifica se já está logado (localStorage)
+    function checkLogin() {
+      const savedLogin = localStorage.getItem("dashboardLoggedIn");
+      const savedTime = localStorage.getItem("dashboardLoginTime");
+      
+      if (savedLogin === "true" && savedTime) {
+        const loginTime = parseInt(savedTime);
+        const now = Date.now();
+        // Sessão válida por 24 horas (86400000 ms)
+        if (now - loginTime < 86400000) {
+          doLoginSuccess();
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Realiza login
+    function doLogin() {
+      const password = document.getElementById("loginPassword").value;
+      
+      if (password === DASHBOARD_PASSWORD) {
+        doLoginSuccess();
+      } else {
+        loginError.style.display = "block";
+        document.getElementById("loginPassword").value = "";
+        document.getElementById("loginPassword").focus();
+      }
+    }
+
+    // Login bem-sucedido
+    function doLoginSuccess() {
+      isLoggedIn = true;
+      localStorage.setItem("dashboardLoggedIn", "true");
+      localStorage.setItem("dashboardLoginTime", Date.now().toString());
+      
+      loginScreen.style.display = "none";
+      mainContent.style.display = "block";
+      
+      addLog("✅ Login realizado com sucesso!");
+      updateRelayInfo();
+    }
+
+    // Logout
+    function doLogout() {
+      isLoggedIn = false;
+      localStorage.removeItem("dashboardLoggedIn");
+      localStorage.removeItem("dashboardLoginTime");
+      
+      if (client && client.isConnected()) {
+        client.disconnect();
+      }
+      
+      mainContent.style.display = "none";
+      loginScreen.style.display = "block";
+      document.getElementById("loginPassword").value = "";
+      loginError.style.display = "none";
+      
+      addLog("🚪 Logout realizado");
+    }
+
+    // === FUNÇÕES DO DASHBOARD ===
+
+    function updateRelayInfo() {
+      if (!isLoggedIn) return;
+      const value = relaySelect.value;
+      const [addr, pin] = value.split('|');
+      const relayNum = parseInt(pin) + 1 + (addr === "0x25" ? 8 : 0);
+      
+      relayInfo.innerHTML = `
+        <strong>Selecionado:</strong> 
+        Relé #${relayNum} | 
+        Endereço I2C: <code>${addr}</code> | 
+        Pino: <code>${pin}</code> | 
+        Tópico: <code>${BASE_TOPIC}/rele/${addr}/pin/${pin}</code>
+      `;
+    }
+
+    function visualFeedback(button) {
+      if (!button) return;
+      btnLigar.classList.remove('pressed', 'confirmed');
+      btnDesligar.classList.remove('pressed', 'confirmed');
+      button.classList.add('pressed');
+      setTimeout(() => button.classList.remove('pressed'), 300);
+    }
+
+    function confirmRelay(addr, pin, state) {
+      if (!isLoggedIn) return;
+      const value = relaySelect.value;
+      const [selAddr, selPin] = value.split('|');
+      
+      if (addr === selAddr && parseInt(pin) === parseInt(selPin)) {
+        const btn = state ? btnLigar : btnDesligar;
+        btn.classList.add('confirmed');
+        setTimeout(() => btn.classList.remove('confirmed'), 1000);
+      }
+    }
+
+    function addLog(msg) {
+      if (!isLoggedIn) return;
+      const time = new Date().toLocaleTimeString();
+      logDiv.innerHTML += `[${time}] ${msg}<br>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function connectMQTT() {
+      if (!isLoggedIn) {
+        alert("❌ Faça login primeiro!");
+        return;
+      }
+      
+      const clientId = document.getElementById("clientId").value || "web-" + Math.random().toString(16).substr(2, 8);
+      const mqttUser = document.getElementById("mqttUser").value;
+      const mqttPass = document.getElementById("mqttPass").value;
+      
+      client = new Paho.MQTT.Client(MQTT_BROKER, MQTT_PORT, clientId);
+
+      client.onConnectionLost = (responseObject) => {
+        if (responseObject.errorCode !== 0) {
+          addLog("❌ Conexão perdida: " + responseObject.errorMessage);
+          updateStatus(false);
+        }
+      };
+
+      client.onMessageArrived = (message) => {
+        addLog("📥 " + message.destinationName + " = " + message.payloadString);
+        
+        if (message.destinationName.includes("/rele/") && message.destinationName.endsWith("/status")) {
+          try {
+            const data = JSON.parse(message.payloadString);
+            const parts = message.destinationName.split('/');
+            const addr = parts[parts.indexOf('rele') + 1];
+            const pin = parts[parts.indexOf('pin') + 1];
+            const state = data.estado === "ON";
+            confirmRelay(addr, parseInt(pin), state);
+            addLog(`✅ Confirmação: Relé ${pin} = ${data.estado}`);
+          } catch (e) {
+            if (message.payloadString === "ON" || message.payloadString === "OFF") {
+              const parts = message.destinationName.split('/');
+              const addr = parts[parts.indexOf('rele') + 1];
+              const pin = parts[parts.indexOf('pin') + 1];
+              confirmRelay(addr, parseInt(pin), message.payloadString === "ON");
+            }
+          }
+        }
+        
+        if (message.destinationName.includes("/telemetria")) {
+          try {
+            const data = JSON.parse(message.payloadString);
+            telemetriaDiv.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+          } catch (e) {
+            telemetriaDiv.innerHTML = message.payloadString;
+          }
+        }
+      };
+
+      const options = {
+        timeout: 10,
+        useSSL: true,
+        onSuccess: () => {
+          addLog("✅ Conectado ao broker!");
+          updateStatus(true);
+          client.subscribe(BASE_TOPIC + "/#", { qos: 1 });
+          addLog("📡 Inscrito em: " + BASE_TOPIC + "/#");
+        },
+        onFailure: (err) => {
+          addLog("❌ Falha na conexão: " + err.errorMessage);
+          updateStatus(false);
+        }
+      };
+
+      // 🔐 Adiciona autenticação MQTT se fornecida
+      if (mqttUser && mqttPass) {
+        options.userName = mqttUser;
+        options.password = mqttPass;
+        addLog("🔐 Usando autenticação MQTT");
+      }
+
+      addLog("🔄 Conectando a " + MQTT_BROKER + ":" + MQTT_PORT + "...");
+      client.connect(options);
+    }
+
+    function disconnectMQTT() {
+      if (client) {
+        client.disconnect();
+        addLog("🔌 Desconectado manualmente");
+        updateStatus(false);
+      }
+    }
+
+    function publishRelay(state) {
+      if (!isLoggedIn) {
+        alert("❌ Faça login primeiro!");
+        return;
+      }
+      if (!client || !client.isConnected()) {
+        alert("❌ Conecte-se ao broker primeiro!");
+        return;
+      }
+      
+      const value = relaySelect.value;
+      const [addr, pin] = value.split('|');
+      const relayNum = parseInt(pin) + 1 + (addr === "0x25" ? 8 : 0);
+      
+      visualFeedback(state ? btnLigar : btnDesligar);
+      
+      const topic = BASE_TOPIC + "/rele/" + addr + "/pin/" + pin;
+      const payload = JSON.stringify({ 
+        acao: state ? "liga" : "desliga", 
+        estado: state,
+        rele: relayNum,
+        ts: Math.floor(Date.now() / 1000)
+      });
+      
+      const message = new Paho.MQTT.Message(payload);
+      message.destinationName = topic;
+      message.qos = 1;
+      client.send(message);
+      
+      addLog(`📤 Publicado: ${topic} = ${payload}`);
+      addLog(`🎯 Ação: Relé #${relayNum} → ${state ? "LIGAR" : "DESLIGAR"}`);
+    }
+
+    function updateStatus(connected) {
+      if (connected) {
+        statusDiv.className = "status connected";
+        statusDiv.innerHTML = "✅ Conectado";
+      } else {
+        statusDiv.className = "status disconnected";
+        statusDiv.innerHTML = "❌ Desconectado";
+      }
+    }
+
+    // === INICIALIZAÇÃO ===
+    window.onload = function() {
+      // Verifica login ao carregar a página
+      if (!checkLogin()) {
+        document.getElementById("loginPassword").focus();
+        addLog("🔐 Aguardando login...");
+      }
+    };
+  </script>
+</body>
+</html>
